@@ -3,14 +3,22 @@ package com.namingbe.fsrs
 import java.time.{Duration, Instant}
 
 class Scheduler(
-  parameters: Vector[Double] = Scheduler.DefaultParameters,
+  parameters: SchedulerParameters = SchedulerParameters.DefaultParameters,
   desiredRetention: Double = 0.9,
   learningSteps: Vector[Duration] = Vector(Duration.ofMinutes(1), Duration.ofMinutes(10)),
   relearningSteps: Vector[Duration] = Vector(Duration.ofMinutes(10)),
   maximumInterval: Long = 36500,
   enableFuzzing: Boolean = true
 ) {
-  def getCardRetrievability(card: Card, currentDateTime: Option[Instant] = None): Double = ???
+  private val decay: Double = -parameters.decayRate
+  private val factor: Double = math.pow(0.9, 1.0 / decay) - 1
+
+  def getCardRetrievability(card: Card, at: Instant = Instant.now()): Double = {
+    card.lastReview.fold(0.0) { last =>
+      val elapsedDays = math.max(0, Duration.between(last, at).toDays)
+      math.pow(1 + factor * elapsedDays / card.stability.get, decay)
+    }
+  }
 
   def reviewCard(
     card: Card,
@@ -35,26 +43,8 @@ class Scheduler(
 }
 
 object Scheduler {
-  val DefaultParameters: Vector[Double] = Vector(
-    0.2172, 1.1771, 3.2602, 16.1507, 7.0114, 0.57, 2.0966, 0.0069, 1.5261, 0.112,
-    1.0178, 1.849, 0.1133, 0.3127, 2.2934, 0.2191, 3.0004, 0.7536, 0.3332, 0.1437, 0.2
-  )
-
-  val StabilityMin: Double = 0.001
   val MinDifficulty: Double = 1.0
   val MaxDifficulty: Double = 10.0
-
-  val LowerBoundsParameters: Vector[Double] = Vector(
-    StabilityMin, StabilityMin, StabilityMin, StabilityMin, 1.0, 0.001, 0.001, 0.001, 0.0, 0.0,
-    0.001, 0.001, 0.001, 0.001, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.1
-  )
-
-  val InitialStabilityMax: Double = 100.0
-
-  val UpperBoundsParameters: Vector[Double] = Vector(
-    InitialStabilityMax, InitialStabilityMax, InitialStabilityMax, InitialStabilityMax, 10.0, 4.0, 4.0, 0.75, 4.5, 0.8,
-    3.5, 5.0, 0.25, 0.9, 4.0, 1.0, 6.0, 2.0, 2.0, 0.8, 0.8
-  )
 
   final case class FuzzRange(start: Double, end: Double, factor: Double)
 
