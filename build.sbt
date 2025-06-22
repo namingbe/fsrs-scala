@@ -13,4 +13,4 @@ Compile / resourceDirectory := baseDirectory.value / "resources"
 Test / managedSourceDirectories := Nil
 Test / unmanagedSourceDirectories := Nil
 
-idePackagePrefix := Some("com.namingbe")
+idePackagePrefix := Some("com.namingbe.fsrs")
