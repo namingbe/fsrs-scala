@@ -7,13 +7,9 @@ case class ReviewLog(
   rating: ReviewLog.Rating,
   reviewDateTime: Instant,
   reviewDuration: Option[Long]
-) {
-  def asString: String = ???
-}
+)
 
 object ReviewLog {
-  def fromString(s: String): ReviewLog = ???
-
   enum Rating extends Ordered[Rating] {
     case Again, Hard, Good, Easy
 

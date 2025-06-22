@@ -14,13 +14,9 @@ case class Card(
   lastReview: Option[Instant] = None
 ) {
   val step: Option[Int] = maybeStep.orElse(Some(0).filter(_ => state == Card.State.Learning))
-
-  def asString: String = ???
 }
 
 object Card {
-  def fromString(s: String): Card = ???
-
   enum State:
     case Learning, Review, Relearning
 }
