@@ -159,15 +159,16 @@ class Scheduler(
     }
   }
 
-  private def initialStability(rating: Rating): Stability = {
-    val stability = initialStabilityFor(rating)
-    Stability(stability)
-  }
+  private def initialStability(rating: Rating): Stability =
+    rating match {
+      case Rating.Again => initialAgainStability
+      case Rating.Hard => initialHardStability
+      case Rating.Good => initialGoodStability
+      case Rating.Easy => initialEasyStability
+    }
 
-  private def initialDifficulty(rating: Rating): Difficulty = {
-    val difficulty = baseDifficulty - exp(difficultyScale * (rating.value - 1)) + 1
-    Difficulty(difficulty)
-  }
+  private def initialDifficulty(rating: Rating): Difficulty =
+    Difficulty(baseDifficulty - exp(difficultyScale * (rating.value - 1)) + 1)
 
   private def nextInterval(stability: Stability): Long = {
     val interval = (stability.value / factor) * (pow(desiredRetention, 1.0 / decay) - 1)
@@ -263,9 +264,6 @@ class Scheduler(
 }
 
 private object Scheduler {
-  private val MinDifficulty: Double = 1.0
-  private val MaxDifficulty: Double = 10.0
-
   private final case class FuzzRange(start: Double, end: Double, factor: Double)
 
   private val FuzzRanges: Vector[FuzzRange] = Vector(
