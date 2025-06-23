@@ -3,6 +3,7 @@ package com.namingbe.fsrs
 import Card.State
 import ReviewLog.Rating
 import java.time.{Duration, Instant}
+import scala.math.*
 
 class Scheduler(
   parameters: SchedulerParameters = SchedulerParameters.DefaultParameters,
@@ -13,12 +14,12 @@ class Scheduler(
   enableFuzzing: Boolean = true
 ) {
   private val decay: Double = -parameters.decayRate
-  private val factor: Double = math.pow(0.9, 1.0 / decay) - 1
+  private val factor: Double = pow(0.9, 1.0 / decay) - 1
 
   def getCardRetrievability(card: Card, at: Instant = Instant.now()): Double = {
     card.lastReview.fold(0.0) { last =>
-      val elapsedDays = math.max(0, Duration.between(last, at).toDays)
-      math.pow(1 + factor * elapsedDays / card.stability.get, decay)
+      val elapsedDays = max(0, Duration.between(last, at).toDays)
+      pow(1 + factor * elapsedDays / card.stability.get, decay)
     }
   }
 
@@ -164,25 +165,79 @@ class Scheduler(
   }
 
   private def initialDifficulty(rating: Rating): Double = {
-    val difficulty = parameters.baseDifficulty - (math.exp(parameters.difficultyScale * (rating.value - 1))) + 1
+    val difficulty = parameters.baseDifficulty - (exp(parameters.difficultyScale * (rating.value - 1))) + 1
     clampDifficulty(difficulty)
   }
 
   private def nextInterval(stability: Double): Long = {
-    val interval = (stability / factor) * (math.pow(desiredRetention, 1.0 / decay) - 1)
-    val days = math.round(interval).toLong
-    math.min(math.max(days, 1), maximumInterval)
+    val interval = (stability / factor) * (pow(desiredRetention, 1.0 / decay) - 1)
+    val days = round(interval).toLong
+    min(max(days, 1), maximumInterval)
   }
 
-  private def shortTermStability(stability: Double, rating: ReviewLog.Rating): Double = ???
+  private def shortTermStability(stability: Double, rating: Rating): Double = {
+    val stabilityIncrease = exp(parameters.shortTermFactor * (rating.value - 3 + parameters.ratingOffset)) *
+      pow(stability, -parameters.stabilityDiminish)
 
-  private def nextDifficulty(difficulty: Double, rating: ReviewLog.Rating): Double = ???
+    val clampedIncrease = if (Set(Rating.Good, Rating.Easy).contains(rating)) {
+      max(stabilityIncrease, 1.0)
+    } else {
+      stabilityIncrease
+    }
 
-  private def nextStability(difficulty: Double, stability: Double, retrievability: Double, rating: ReviewLog.Rating): Double = ???
+    val newStability = stability * clampedIncrease
+    clampStability(newStability)
+  }
 
-  private def nextForgetStability(difficulty: Double, stability: Double, retrievability: Double): Double = ???
+  private def nextDifficulty(difficulty: Double, rating: Rating): Double = {
+    def linearDamping(deltaDifficulty: Double, difficulty: Double): Double = {
+      (10.0 - difficulty) * deltaDifficulty / 9.0
+    }
 
-  private def nextRecallStability(difficulty: Double, stability: Double, retrievability: Double, rating: ReviewLog.Rating): Double = ???
+    def meanReversion(arg1: Double, arg2: Double): Double = {
+      parameters.meanReversionWeight * arg1 + (1 - parameters.meanReversionWeight) * arg2
+    }
+
+    val arg1 = initialDifficulty(Rating.Easy)
+    val deltaDifficulty = -(parameters.difficultyChangeRate * (rating.value - 3))
+    val arg2 = difficulty + linearDamping(deltaDifficulty, difficulty)
+
+    val newDifficulty = meanReversion(arg1, arg2)
+    clampDifficulty(newDifficulty)
+  }
+
+  private def nextStability(difficulty: Double, stability: Double, retrievability: Double, rating: Rating): Double = {
+    val newStability = if (rating == Rating.Again) {
+      nextForgetStability(difficulty, stability, retrievability)
+    } else {
+      nextRecallStability(difficulty, stability, retrievability, rating)
+    }
+    clampStability(newStability)
+  }
+
+  private def nextForgetStability(difficulty: Double, stability: Double, retrievability: Double): Double = {
+    val longTermParams = parameters.forgetFactor *
+      pow(difficulty, -parameters.difficultyImpact) *
+      (pow(stability + 1, parameters.stabilityGrowth) - 1) *
+      exp((1 - retrievability) * parameters.forgetRetrievability)
+
+    val shortTermParams = stability / exp(parameters.shortTermFactor * parameters.ratingOffset)
+
+    min(longTermParams, shortTermParams)
+  }
+
+  private def nextRecallStability(difficulty: Double, stability: Double, retrievability: Double, rating: Rating): Double = {
+    val hardPenalty = if (rating == Rating.Hard) parameters.hardPenalty else 1.0
+    val easyBonus = if (rating == Rating.Easy) parameters.easyBonus else 1.0
+
+    stability * (1 +
+      exp(parameters.recallFactor) *
+        (11 - difficulty) *
+        pow(stability, -parameters.stabilityExponent) *
+        (exp((1 - retrievability) * parameters.retrievabilityImpact) - 1) *
+        hardPenalty *
+        easyBonus)
+  }
 
   private def getFuzzedInterval(interval: Duration, state: State): Duration = {
     if (!enableFuzzing || state != State.Review) {
@@ -193,15 +248,15 @@ class Scheduler(
         interval
       } else {
         val delta = Scheduler.FuzzRanges.foldLeft(1.0) { (acc, range) =>
-          acc + range.factor * math.max(math.min(intervalDays, range.end) - range.start, 0.0)
+          acc + range.factor * max(min(intervalDays, range.end) - range.start, 0.0)
         }
 
-        val minDays = math.max(2, math.round(intervalDays - delta).toInt)
-        val maxDays = math.min(math.round(intervalDays + delta).toInt, maximumInterval.toInt)
-        val clampedMinDays = math.min(minDays, maxDays)
+        val minDays = max(2, round(intervalDays - delta).toInt)
+        val maxDays = min(round(intervalDays + delta).toInt, maximumInterval.toInt)
+        val clampedMinDays = min(minDays, maxDays)
 
-        val fuzzedDays = (math.random() * (maxDays - clampedMinDays + 1) + clampedMinDays).toInt
-        val finalDays = math.min(fuzzedDays, maximumInterval.toInt)
+        val fuzzedDays = (random() * (maxDays - clampedMinDays + 1) + clampedMinDays).toInt
+        val finalDays = min(fuzzedDays, maximumInterval.toInt)
 
         Duration.ofDays(finalDays)
       }
@@ -209,11 +264,11 @@ class Scheduler(
   }
 
   private def clampDifficulty(difficulty: Double): Double = {
-    math.min(math.max(difficulty, Scheduler.MinDifficulty), Scheduler.MaxDifficulty)
+    min(max(difficulty, Scheduler.MinDifficulty), Scheduler.MaxDifficulty)
   }
 
   private def clampStability(stability: Double): Double = {
-    math.max(stability, SchedulerParameters.StabilityMin)
+    max(stability, SchedulerParameters.StabilityMin)
   }
 }
 
