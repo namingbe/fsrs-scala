@@ -4,7 +4,7 @@ import java.time.Instant
 import java.util.UUID
 
 
-case class Card(
+final case class Card(
   cardId: String = UUID.randomUUID().toString,
   state: Card.State = Card.State.StepBased(0),
   stability: Option[Stability] = None,

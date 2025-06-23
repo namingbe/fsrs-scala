@@ -192,7 +192,7 @@ class Scheduler(
   }
 }
 
-private object Scheduler {
+object Scheduler {
   private final case class FuzzRange(start: Double, end: Double, factor: Double)
 
   private val FuzzRanges: Vector[FuzzRange] = Vector(
