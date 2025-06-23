@@ -11,7 +11,7 @@ class Scheduler(
   learningSteps: Vector[Duration] = Vector(Duration.ofMinutes(1), Duration.ofMinutes(10)),
   relearningSteps: Vector[Duration] = Vector(Duration.ofMinutes(10)),
   maximumInterval: Long = 36500,
-  enableFuzzing: Boolean = true
+  enableFuzzing: Boolean = true,
 ) {
   private val decay: Double = -parameters.decayRate
   private val factor: Double = pow(0.9, 1.0 / decay) - 1
@@ -157,21 +157,19 @@ class Scheduler(
     }
   }
 
-  def validateParameters(): Unit = ???
-
   private def initialStability(rating: Rating): Double = {
     val stability = parameters.initialStabilityFor(rating)
     clampStability(stability)
   }
 
   private def initialDifficulty(rating: Rating): Double = {
-    val difficulty = parameters.baseDifficulty - (exp(parameters.difficultyScale * (rating.value - 1))) + 1
+    val difficulty = parameters.baseDifficulty - exp(parameters.difficultyScale * (rating.value - 1)) + 1
     clampDifficulty(difficulty)
   }
 
   private def nextInterval(stability: Double): Long = {
     val interval = (stability / factor) * (pow(desiredRetention, 1.0 / decay) - 1)
-    val days = round(interval).toLong
+    val days = round(interval)
     min(max(days, 1), maximumInterval)
   }
 
@@ -272,13 +270,13 @@ class Scheduler(
   }
 }
 
-object Scheduler {
-  val MinDifficulty: Double = 1.0
-  val MaxDifficulty: Double = 10.0
+private object Scheduler {
+  private val MinDifficulty: Double = 1.0
+  private val MaxDifficulty: Double = 10.0
 
-  final case class FuzzRange(start: Double, end: Double, factor: Double)
+  private final case class FuzzRange(start: Double, end: Double, factor: Double)
 
-  val FuzzRanges: Vector[FuzzRange] = Vector(
+  private val FuzzRanges: Vector[FuzzRange] = Vector(
     FuzzRange(2.5, 7.0, 0.15),
     FuzzRange(7.0, 20.0, 0.1),
     FuzzRange(20.0, Double.PositiveInfinity, 0.05)
