@@ -1,5 +1,7 @@
 package com.namingbe.fsrs
 
+import Card.State
+import ReviewLog.Rating
 import java.time.{Duration, Instant}
 
 class Scheduler(
@@ -22,39 +24,29 @@ class Scheduler(
 
   def reviewCard(
     card: Card,
-    rating: ReviewLog.Rating,
+    rating: Rating,
     reviewedAt: Instant = Instant.now,
   ): (Card, ReviewLog) = {
-
-    // Determine if this is same-day review
     val isSameDayReview = card.lastReview.exists { lastReview =>
       Duration.between(lastReview, reviewedAt).toDays < 1
     }
 
-    // Determine which step sequence to use based on card history
     val isInitialLearning = card.stability.isEmpty
     val stepSequence = if (isInitialLearning) learningSteps else relearningSteps
 
-    // Calculate updated memory parameters
     val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt, isSameDayReview)
 
-    // Calculate next state and interval
     val (nextState, nextInterval) = card.state match {
-      case Card.State.StepBased(currentStep) =>
-        calculateStepBasedTransition(currentStep, stepSequence, rating, newStability)
-
-      case Card.State.Review =>
-        calculateReviewTransition(rating, newStability, stepSequence)
+      case State.StepBased(currentStep) => calculateStepBasedTransition(currentStep, stepSequence, rating, newStability)
+      case State.Review => calculateReviewTransition(rating, newStability, stepSequence)
     }
 
-    // Apply fuzzing if enabled and in Review state
-    val finalInterval = if (enableFuzzing && nextState == Card.State.Review) {
+    val finalInterval = if (enableFuzzing && nextState == State.Review) {
       getFuzzedInterval(nextInterval)
     } else {
       nextInterval
     }
 
-    // Construct final card and review log
     val finalCard = card.copy(
       state = nextState,
       stability = Some(newStability),
@@ -106,17 +98,17 @@ class Scheduler(
     // Check if we should graduate to Review state
     val shouldGraduate = stepSequence.isEmpty ||
       (currentStep >= stepSequence.length &&
-        Set(ReviewLog.Rating.Hard, ReviewLog.Rating.Good, ReviewLog.Rating.Easy).contains(rating))
+        Set(Rating.Hard, Rating.Good, Rating.Easy).contains(rating))
 
     if (shouldGraduate) {
-      (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+      (State.Review, Duration.ofDays(nextInterval(stability)))
     } else {
       // Stay in StepBased state with step-based intervals
       val (nextStep, stepInterval) = rating match {
-        case ReviewLog.Rating.Again =>
+        case Rating.Again =>
           (0, stepSequence(0))
 
-        case ReviewLog.Rating.Hard =>
+        case Rating.Hard =>
           val interval = if (currentStep == 0 && stepSequence.length == 1) {
             stepSequence(0).multipliedBy(15).dividedBy(10) // * 1.5
           } else if (currentStep == 0 && stepSequence.length >= 2) {
@@ -126,20 +118,20 @@ class Scheduler(
           }
           (currentStep, interval)
 
-        case ReviewLog.Rating.Good =>
+        case Rating.Good =>
           if (currentStep + 1 == stepSequence.length) {
             // Graduate to Review state
-            return (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+            return (State.Review, Duration.ofDays(nextInterval(stability)))
           } else {
             (currentStep + 1, stepSequence(currentStep + 1))
           }
 
-        case ReviewLog.Rating.Easy =>
+        case Rating.Easy =>
           // Graduate to Review state immediately
-          return (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+          return (State.Review, Duration.ofDays(nextInterval(stability)))
       }
 
-      (Card.State.StepBased(nextStep), stepInterval)
+      (State.StepBased(nextStep), stepInterval)
     }
   }
 
@@ -149,15 +141,15 @@ class Scheduler(
     relearningSteps: Vector[Duration]
   ): (Card.State, Duration) = {
     rating match {
-      case ReviewLog.Rating.Again =>
+      case Rating.Again =>
         if (relearningSteps.isEmpty) {
-          (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+          (State.Review, Duration.ofDays(nextInterval(stability)))
         } else {
-          (Card.State.StepBased(0), relearningSteps(0))
+          (State.StepBased(0), relearningSteps(0))
         }
 
-      case ReviewLog.Rating.Hard | ReviewLog.Rating.Good | ReviewLog.Rating.Easy =>
-        (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+      case Rating.Hard | Rating.Good | Rating.Easy =>
+        (State.Review, Duration.ofDays(nextInterval(stability)))
     }
   }
 
