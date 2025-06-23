@@ -29,11 +29,7 @@ class Scheduler(
   ): (Card, ReviewLog) = {
     val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt)
     val (nextState, nextInterval) = updateStateAndInterval(card, rating, newStability)
-    val finalInterval = if (enableFuzzing && nextState == State.Review) {
-      getFuzzedInterval(nextInterval)
-    } else {
-      nextInterval
-    }
+    val finalInterval = getFuzzedInterval(nextInterval, nextState)
 
     val finalCard = Card(
       cardId = card.cardId,
@@ -162,11 +158,21 @@ class Scheduler(
 
   def validateParameters(): Unit = ???
 
-  private def initialStability(rating: ReviewLog.Rating): Double = ???
+  private def initialStability(rating: Rating): Double = {
+    val stability = parameters.initialStabilityFor(rating)
+    clampStability(stability)
+  }
 
-  private def initialDifficulty(rating: ReviewLog.Rating): Double = ???
+  private def initialDifficulty(rating: Rating): Double = {
+    val difficulty = parameters.baseDifficulty - (math.exp(parameters.difficultyScale * (rating.value - 1))) + 1
+    clampDifficulty(difficulty)
+  }
 
-  private def nextInterval(stability: Double): Long = ???
+  private def nextInterval(stability: Double): Long = {
+    val interval = (stability / factor) * (math.pow(desiredRetention, 1.0 / decay) - 1)
+    val days = math.round(interval).toLong
+    math.min(math.max(days, 1), maximumInterval)
+  }
 
   private def shortTermStability(stability: Double, rating: ReviewLog.Rating): Double = ???
 
@@ -178,11 +184,37 @@ class Scheduler(
 
   private def nextRecallStability(difficulty: Double, stability: Double, retrievability: Double, rating: ReviewLog.Rating): Double = ???
 
-  private def getFuzzedInterval(interval: Duration): Duration = ???
+  private def getFuzzedInterval(interval: Duration, state: State): Duration = {
+    if (!enableFuzzing || state != State.Review) {
+      interval
+    } else {
+      val intervalDays = interval.toDays
+      if (intervalDays < 2.5) {
+        interval
+      } else {
+        val delta = Scheduler.FuzzRanges.foldLeft(1.0) { (acc, range) =>
+          acc + range.factor * math.max(math.min(intervalDays, range.end) - range.start, 0.0)
+        }
 
-  private def clampDifficulty(difficulty: Double): Double = ???
+        val minDays = math.max(2, math.round(intervalDays - delta).toInt)
+        val maxDays = math.min(math.round(intervalDays + delta).toInt, maximumInterval.toInt)
+        val clampedMinDays = math.min(minDays, maxDays)
 
-  private def clampStability(stability: Double): Double = ???
+        val fuzzedDays = (math.random() * (maxDays - clampedMinDays + 1) + clampedMinDays).toInt
+        val finalDays = math.min(fuzzedDays, maximumInterval.toInt)
+
+        Duration.ofDays(finalDays)
+      }
+    }
+  }
+
+  private def clampDifficulty(difficulty: Double): Double = {
+    math.min(math.max(difficulty, Scheduler.MinDifficulty), Scheduler.MaxDifficulty)
+  }
+
+  private def clampStability(stability: Double): Double = {
+    math.max(stability, SchedulerParameters.StabilityMin)
+  }
 }
 
 object Scheduler {
