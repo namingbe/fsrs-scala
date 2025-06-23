@@ -13,7 +13,9 @@ class Scheduler(
   maximumInterval: Long = 36500,
   enableFuzzing: Boolean = true,
 ) {
-  private val decay: Double = -parameters.decayRate
+  import parameters._
+
+  private val decay: Double = -decayRate
   private val factor: Double = pow(0.9, 1.0 / decay) - 1
 
   def getCardRetrievability(card: Card, at: Instant = Instant.now()): Double = {
@@ -158,12 +160,12 @@ class Scheduler(
   }
 
   private def initialStability(rating: Rating): Double = {
-    val stability = parameters.initialStabilityFor(rating)
+    val stability = initialStabilityFor(rating)
     clampStability(stability)
   }
 
   private def initialDifficulty(rating: Rating): Double = {
-    val difficulty = parameters.baseDifficulty - exp(parameters.difficultyScale * (rating.value - 1)) + 1
+    val difficulty = baseDifficulty - exp(difficultyScale * (rating.value - 1)) + 1
     clampDifficulty(difficulty)
   }
 
@@ -174,8 +176,8 @@ class Scheduler(
   }
 
   private def shortTermStability(stability: Double, rating: Rating): Double = {
-    val stabilityIncrease = exp(parameters.shortTermFactor * (rating.value - 3 + parameters.ratingOffset)) *
-      pow(stability, -parameters.stabilityDiminish)
+    val stabilityIncrease = exp(shortTermFactor * (rating.value - 3 + ratingOffset)) *
+      pow(stability, -stabilityDiminish)
 
     val clampedIncrease = if (Set(Rating.Good, Rating.Easy).contains(rating)) {
       max(stabilityIncrease, 1.0)
@@ -193,11 +195,11 @@ class Scheduler(
     }
 
     def meanReversion(arg1: Double, arg2: Double): Double = {
-      parameters.meanReversionWeight * arg1 + (1 - parameters.meanReversionWeight) * arg2
+      meanReversionWeight * arg1 + (1 - meanReversionWeight) * arg2
     }
 
     val arg1 = initialDifficulty(Rating.Easy)
-    val deltaDifficulty = -(parameters.difficultyChangeRate * (rating.value - 3))
+    val deltaDifficulty = -(difficultyChangeRate * (rating.value - 3))
     val arg2 = difficulty + linearDamping(deltaDifficulty, difficulty)
 
     val newDifficulty = meanReversion(arg1, arg2)
@@ -214,27 +216,29 @@ class Scheduler(
   }
 
   private def nextForgetStability(difficulty: Double, stability: Double, retrievability: Double): Double = {
-    val longTermParams = parameters.forgetFactor *
-      pow(difficulty, -parameters.difficultyImpact) *
-      (pow(stability + 1, parameters.stabilityGrowth) - 1) *
-      exp((1 - retrievability) * parameters.forgetRetrievability)
+    val longTermParams = forgetFactor *
+      pow(difficulty, -difficultyImpact) *
+      (pow(stability + 1, stabilityGrowth) - 1) *
+      exp((1 - retrievability) * forgetRetrievability)
 
-    val shortTermParams = stability / exp(parameters.shortTermFactor * parameters.ratingOffset)
+    val shortTermParams = stability / exp(shortTermFactor * ratingOffset)
 
     min(longTermParams, shortTermParams)
   }
 
   private def nextRecallStability(difficulty: Double, stability: Double, retrievability: Double, rating: Rating): Double = {
-    val hardPenalty = if (rating == Rating.Hard) parameters.hardPenalty else 1.0
-    val easyBonus = if (rating == Rating.Easy) parameters.easyBonus else 1.0
+    val ratingFactor = rating match {
+      case Rating.Hard => hardPenalty
+      case Rating.Easy => easyBonus
+      case _ => 1.0
+    }
 
     stability * (1 +
-      exp(parameters.recallFactor) *
+      exp(recallFactor) *
         (11 - difficulty) *
-        pow(stability, -parameters.stabilityExponent) *
-        (exp((1 - retrievability) * parameters.retrievabilityImpact) - 1) *
-        hardPenalty *
-        easyBonus)
+        pow(stability, -stabilityExponent) *
+        (exp((1 - retrievability) * retrievabilityImpact) - 1) *
+        ratingFactor)
   }
 
   private def getFuzzedInterval(interval: Duration, state: State): Duration = {
