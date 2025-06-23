@@ -23,22 +23,166 @@ class Scheduler(
   def reviewCard(
     card: Card,
     rating: ReviewLog.Rating,
-    reviewDateTime: Option[Instant] = None,
-    reviewDuration: Option[Long] = None
-  ): (Card, ReviewLog) = ???
+    reviewedAt: Instant = Instant.now,
+  ): (Card, ReviewLog) = {
+
+    // Determine if this is same-day review
+    val isSameDayReview = card.lastReview.exists { lastReview =>
+      Duration.between(lastReview, reviewedAt).toDays < 1
+    }
+
+    // Determine which step sequence to use based on card history
+    val isInitialLearning = card.stability.isEmpty
+    val stepSequence = if (isInitialLearning) learningSteps else relearningSteps
+
+    // Calculate updated memory parameters
+    val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt, isSameDayReview)
+
+    // Calculate next state and interval
+    val (nextState, nextInterval) = card.state match {
+      case Card.State.StepBased(currentStep) =>
+        calculateStepBasedTransition(currentStep, stepSequence, rating, newStability)
+
+      case Card.State.Review =>
+        calculateReviewTransition(rating, newStability, stepSequence)
+    }
+
+    // Apply fuzzing if enabled and in Review state
+    val finalInterval = if (enableFuzzing && nextState == Card.State.Review) {
+      getFuzzedInterval(nextInterval)
+    } else {
+      nextInterval
+    }
+
+    // Construct final card and review log
+    val finalCard = card.copy(
+      state = nextState,
+      stability = Some(newStability),
+      difficulty = Some(newDifficulty),
+      due = reviewedAt.plus(finalInterval),
+      lastReview = Some(reviewedAt)
+    )
+
+    val reviewLog = ReviewLog(
+      cardId = card.cardId,
+      rating = rating,
+      reviewedAt = reviewedAt,
+    )
+
+    (finalCard, reviewLog)
+  }
+
+  private def updateMemoryParameters(
+    card: Card,
+    rating: ReviewLog.Rating,
+    reviewedAt: Instant,
+    isSameDayReview: Boolean
+  ): (Double, Double) = {
+    val (stability, difficulty) = if (card.stability.isEmpty && card.difficulty.isEmpty) {
+      // First review - set initial values
+      (initialStability(rating), initialDifficulty(rating))
+    } else if (isSameDayReview) {
+      // Same-day review - use short-term stability formula
+      val newStability = shortTermStability(card.stability.get, rating)
+      val newDifficulty = nextDifficulty(card.difficulty.get, rating)
+      (newStability, newDifficulty)
+    } else {
+      // Multi-day review - use full FSRS formulas
+      val retrievability = getCardRetrievability(card, reviewedAt)
+      val newStability = nextStability(card.difficulty.get, card.stability.get, retrievability, rating)
+      val newDifficulty = nextDifficulty(card.difficulty.get, rating)
+      (newStability, newDifficulty)
+    }
+    (stability, difficulty)
+  }
+
+  private def calculateStepBasedTransition(
+    currentStep: Int,
+    stepSequence: Vector[Duration],
+    rating: ReviewLog.Rating,
+    stability: Double
+  ): (Card.State, Duration) = {
+
+    // Check if we should graduate to Review state
+    val shouldGraduate = stepSequence.isEmpty ||
+      (currentStep >= stepSequence.length &&
+        Set(ReviewLog.Rating.Hard, ReviewLog.Rating.Good, ReviewLog.Rating.Easy).contains(rating))
+
+    if (shouldGraduate) {
+      (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+    } else {
+      // Stay in StepBased state with step-based intervals
+      val (nextStep, stepInterval) = rating match {
+        case ReviewLog.Rating.Again =>
+          (0, stepSequence(0))
+
+        case ReviewLog.Rating.Hard =>
+          val interval = if (currentStep == 0 && stepSequence.length == 1) {
+            stepSequence(0).multipliedBy(15).dividedBy(10) // * 1.5
+          } else if (currentStep == 0 && stepSequence.length >= 2) {
+            Duration.ofMillis((stepSequence(0).toMillis + stepSequence(1).toMillis) / 2)
+          } else {
+            stepSequence(currentStep)
+          }
+          (currentStep, interval)
+
+        case ReviewLog.Rating.Good =>
+          if (currentStep + 1 == stepSequence.length) {
+            // Graduate to Review state
+            return (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+          } else {
+            (currentStep + 1, stepSequence(currentStep + 1))
+          }
+
+        case ReviewLog.Rating.Easy =>
+          // Graduate to Review state immediately
+          return (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+      }
+
+      (Card.State.StepBased(nextStep), stepInterval)
+    }
+  }
+
+  private def calculateReviewTransition(
+    rating: ReviewLog.Rating,
+    stability: Double,
+    relearningSteps: Vector[Duration]
+  ): (Card.State, Duration) = {
+    rating match {
+      case ReviewLog.Rating.Again =>
+        if (relearningSteps.isEmpty) {
+          (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+        } else {
+          (Card.State.StepBased(0), relearningSteps(0))
+        }
+
+      case ReviewLog.Rating.Hard | ReviewLog.Rating.Good | ReviewLog.Rating.Easy =>
+        (Card.State.Review, Duration.ofDays(nextInterval(stability)))
+    }
+  }
 
   def validateParameters(): Unit = ???
 
   private def initialStability(rating: ReviewLog.Rating): Double = ???
+
   private def initialDifficulty(rating: ReviewLog.Rating): Double = ???
+
   private def nextInterval(stability: Double): Long = ???
+
   private def shortTermStability(stability: Double, rating: ReviewLog.Rating): Double = ???
+
   private def nextDifficulty(difficulty: Double, rating: ReviewLog.Rating): Double = ???
+
   private def nextStability(difficulty: Double, stability: Double, retrievability: Double, rating: ReviewLog.Rating): Double = ???
+
   private def nextForgetStability(difficulty: Double, stability: Double, retrievability: Double): Double = ???
+
   private def nextRecallStability(difficulty: Double, stability: Double, retrievability: Double, rating: ReviewLog.Rating): Double = ???
+
   private def getFuzzedInterval(interval: Duration): Duration = ???
+
   private def clampDifficulty(difficulty: Double): Double = ???
+
   private def clampStability(stability: Double): Double = ???
 }
 

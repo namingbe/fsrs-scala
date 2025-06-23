@@ -5,8 +5,7 @@ import java.time.Instant
 case class ReviewLog(
   cardId: String,
   rating: ReviewLog.Rating,
-  reviewDateTime: Instant,
-  reviewDuration: Option[Long]
+  reviewedAt: Instant,
 )
 
 object ReviewLog {
