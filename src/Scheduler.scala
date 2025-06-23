@@ -238,26 +238,22 @@ class Scheduler(
   }
 
   private def getFuzzedInterval(interval: Duration, state: State): Duration = {
-    if (!enableFuzzing || state != State.Review) {
+    val intervalDays = interval.toDays
+    if (!enableFuzzing || state != State.Review || intervalDays < 2.5) {
       interval
     } else {
-      val intervalDays = interval.toDays
-      if (intervalDays < 2.5) {
-        interval
-      } else {
-        val delta = Scheduler.FuzzRanges.foldLeft(1.0) { (acc, range) =>
-          acc + range.factor * max(min(intervalDays, range.end) - range.start, 0.0)
-        }
-
-        val minDays = max(2, round(intervalDays - delta).toInt)
-        val maxDays = min(round(intervalDays + delta).toInt, maximumInterval.toInt)
-        val clampedMinDays = min(minDays, maxDays)
-
-        val fuzzedDays = (random() * (maxDays - clampedMinDays + 1) + clampedMinDays).toInt
-        val finalDays = min(fuzzedDays, maximumInterval.toInt)
-
-        Duration.ofDays(finalDays)
+      val delta = Scheduler.FuzzRanges.foldLeft(1.0) { (acc, range) =>
+        acc + range.factor * max(min(intervalDays, range.end) - range.start, 0.0)
       }
+
+      val minDays = max(2, round(intervalDays - delta).toInt)
+      val maxDays = min(round(intervalDays + delta).toInt, maximumInterval.toInt)
+      val clampedMinDays = min(minDays, maxDays)
+
+      val fuzzedDays = (random() * (maxDays - clampedMinDays + 1) + clampedMinDays).toInt
+      val finalDays = min(fuzzedDays, maximumInterval.toInt)
+
+      Duration.ofDays(finalDays)
     }
   }
 
