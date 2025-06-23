@@ -15,3 +15,24 @@ For tests, I presume? Bruh.
 Checked after writing this, it was for tests. Polluting implementation for tests.
 
 My Claude is laughing his ass off from Torch being used to optimise 21 parameter.
+Speaking of, **everything below is Claude's yapping**.
+
+## Implementation Notes
+
+This implementation follows the FSRS v6 mathematical formulas directly, with some key abstraction differences from the Python reference:
+
+### Core Algorithm Structure
+The algorithm reduces to three clean phases:
+1. **Memory Update**: Calculate new stability and difficulty based on review performance
+2. **State/Interval Calculation**: Determine next card state and base interval
+3. **Fuzzing**: Apply randomization to Review intervals (when enabled)
+
+### Key Abstractions
+
+**State Management**: Uses a two-state ADT (`StepBased(step)` | `Review`) instead of the Python's three-state enum. Learning and Relearning are algorithmically identical - they both use step-based intervals and the same memory update formulas.
+
+**Parameter Handling**: Structured case class with meaningful names (`baseDifficulty`, `hardPenalty`, etc.) rather than raw tuple indexing (`w[4]`, `w[15]`).
+
+**Functional Design**: Pure functions for all calculations. The Python version uses imperative card mutation throughout a 200+ line method; we compute values functionally and construct the final card once.
+
+**Implementation Fidelity**: Each mathematical formula maps to a single, focused function. No serialization, no test utilities, no optimization framework dependencies - just the scheduling algorithm.
