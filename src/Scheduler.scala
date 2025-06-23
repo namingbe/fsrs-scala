@@ -27,28 +27,21 @@ class Scheduler(
     rating: Rating,
     reviewedAt: Instant = Instant.now,
   ): (Card, ReviewLog) = {
-    val isInitialLearning = card.stability.isEmpty
-    val stepSequence = if (isInitialLearning) learningSteps else relearningSteps
-
     val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt)
-
-    val (nextState, nextInterval) = card.state match {
-      case State.StepBased(currentStep) => calculateStepBasedTransition(currentStep, stepSequence, rating, newStability)
-      case State.Review => calculateReviewTransition(rating, newStability, stepSequence)
-    }
-
+    val (nextState, nextInterval) = updateStateAndInterval(card, rating, newStability)
     val finalInterval = if (enableFuzzing && nextState == State.Review) {
       getFuzzedInterval(nextInterval)
     } else {
       nextInterval
     }
 
-    val finalCard = card.copy(
+    val finalCard = Card(
+      cardId = card.cardId,
       state = nextState,
       stability = Some(newStability),
       difficulty = Some(newDifficulty),
       due = reviewedAt.plus(finalInterval),
-      lastReview = Some(reviewedAt)
+      lastReview = Some(reviewedAt),
     )
 
     val reviewLog = ReviewLog(
@@ -85,6 +78,20 @@ class Scheduler(
         val newDifficulty = nextDifficulty(card.difficulty.get, rating)
         (newStability, newDifficulty)
       }
+    }
+  }
+
+  private def updateStateAndInterval(
+    card: Card,
+    rating: Rating,
+    stability: Double
+  ): (State, Duration) = {
+    val isInitialLearning = card.stability.isEmpty
+    val stepSequence = if (isInitialLearning) learningSteps else relearningSteps
+
+    card.state match {
+      case State.StepBased(currentStep) => calculateStepBasedTransition(currentStep, stepSequence, rating, stability)
+      case State.Review => calculateReviewTransition(rating, stability, stepSequence)
     }
   }
 
