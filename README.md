@@ -4,6 +4,19 @@ Scala implementation of FSRS.
 I'm going to base this thing on the [official Python implementation](https://github.com/open-spaced-repetition/py-fsrs) and half-ass the living shit out of it.
 Use at your own peril.
 
+Since this is for my personal use rn, this is how to install it to the local repo
+```shell
+rm -rf ~/.ivy2/local/com.namingbe/fsrs-scala_3*
+sbt publishLocal
+```
+
+And this is how to hook it up from another project
+```sbt
+libraryDependencies += "com.namingbe" %% "fsrs-scala" % "0.1.0"
+```
+
+The abstraction and interfaces are shit so if you're actually using that. Get help.
+
 ## Observations (I didn't bother reading the docs)
 
 Card entity is more of a CardSchedulingState entity, an object that is everything except for the card contents themselves.
