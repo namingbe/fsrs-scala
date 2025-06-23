@@ -7,7 +7,7 @@ import java.util.UUID
 case class Card(
   cardId: String = UUID.randomUUID().toString,
   state: Card.State = Card.State.StepBased(0),
-  stability: Option[Double] = None,
+  stability: Option[Stability] = None,
   difficulty: Option[Double] = None,
   due: Instant = Instant.now(),
   lastReview: Option[Instant] = None
