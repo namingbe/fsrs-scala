@@ -100,13 +100,8 @@ class Scheduler(
     rating: Rating,
     stability: Stability,
   ): (State, Duration) = {
-
-    // Check if we should graduate to Review state
-    val shouldGraduate = stepSequence.isEmpty ||
-      (currentStep >= stepSequence.length &&
-        Set(Rating.Hard, Rating.Good, Rating.Easy).contains(rating))
-
-    if (shouldGraduate) {
+    if (currentStep >= stepSequence.length && rating != Rating.Again) {
+      // Graduating from step-based
       (State.Review, Duration.ofDays(nextInterval(stability)))
     } else {
       // Stay in StepBased state with step-based intervals
@@ -191,8 +186,8 @@ class Scheduler(
   }
 
   private def nextDifficulty(difficulty: Difficulty, rating: Rating): Difficulty = {
-    def linearDamping(deltaDifficulty: Double, difficulty: Double): Double = {
-      (10.0 - difficulty) * deltaDifficulty / 9.0
+    def linearDamping(deltaDifficulty: Double): Double = {
+      (10.0 - difficulty.value) * deltaDifficulty / 9.0
     }
 
     def meanReversion(arg1: Difficulty, arg2: Double): Double = {
@@ -201,45 +196,44 @@ class Scheduler(
 
     val arg1 = initialDifficulty(Rating.Easy)
     val deltaDifficulty = -(difficultyChangeRate * (rating.value - 3))
-    val arg2 = difficulty.value + linearDamping(deltaDifficulty, difficulty.value)
+    val arg2 = difficulty.value + linearDamping(deltaDifficulty)
 
     val newDifficulty = meanReversion(arg1, arg2)
     Difficulty(newDifficulty)
   }
 
-  private def nextStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability = {
-    val newStability = if (rating == Rating.Again) {
-      nextForgetStability(difficulty, stability, retrievability)
-    } else {
-      nextRecallStability(difficulty, stability, retrievability, rating)
+  private def nextStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability =
+    rating match {
+      case Rating.Again => nextForgetStability(difficulty, stability, retrievability)
+      case _ => nextRecallStability(difficulty, stability, retrievability, rating)
     }
-    Stability(newStability)
+
+  private def nextForgetStability(difficulty: Difficulty, stability: Stability, retrievability: Double): Stability = {
+    val shortTerm = stability.value / exp(shortTermFactor * ratingOffset)
+    val longTerm = List(
+      forgetFactor,
+      pow(difficulty.value, -difficultyImpact),
+      pow(stability.value + 1, stabilityGrowth) - 1,
+      exp((1 - retrievability) * forgetRetrievability),
+    ).product
+    Stability(min(shortTerm, longTerm))
   }
 
-  private def nextForgetStability(difficulty: Difficulty, stability: Stability, retrievability: Double): Double = {
-    val longTermParams = forgetFactor *
-      pow(difficulty.value, -difficultyImpact) *
-      (pow(stability.value + 1, stabilityGrowth) - 1) *
-      exp((1 - retrievability) * forgetRetrievability)
-
-    val shortTermParams = stability.value / exp(shortTermFactor * ratingOffset)
-
-    min(longTermParams, shortTermParams)
-  }
-
-  private def nextRecallStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Double = {
+  private def nextRecallStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability = {
     val ratingFactor = rating match {
       case Rating.Hard => hardPenalty
       case Rating.Easy => easyBonus
       case _ => 1.0
     }
+    val compositeFactor = List(
+      exp(recallFactor),
+      11 - difficulty.value,
+      pow(stability.value, -stabilityExponent),
+      exp((1 - retrievability) * retrievabilityImpact) - 1,
+      ratingFactor,
+    ).product
 
-    stability.value * (1 +
-      exp(recallFactor) *
-        (11 - difficulty.value) *
-        pow(stability.value, -stabilityExponent) *
-        (exp((1 - retrievability) * retrievabilityImpact) - 1) *
-        ratingFactor)
+    Stability(stability.value * (1 + compositeFactor))
   }
 
   private def getFuzzedInterval(interval: Duration, state: State): Duration = {
