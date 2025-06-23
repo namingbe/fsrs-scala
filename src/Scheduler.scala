@@ -27,14 +27,10 @@ class Scheduler(
     rating: Rating,
     reviewedAt: Instant = Instant.now,
   ): (Card, ReviewLog) = {
-    val isSameDayReview = card.lastReview.exists { lastReview =>
-      Duration.between(lastReview, reviewedAt).toDays < 1
-    }
-
     val isInitialLearning = card.stability.isEmpty
     val stepSequence = if (isInitialLearning) learningSteps else relearningSteps
 
-    val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt, isSameDayReview)
+    val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt)
 
     val (nextState, nextInterval) = card.state match {
       case State.StepBased(currentStep) => calculateStepBasedTransition(currentStep, stepSequence, rating, newStability)
@@ -66,34 +62,38 @@ class Scheduler(
 
   private def updateMemoryParameters(
     card: Card,
-    rating: ReviewLog.Rating,
-    reviewedAt: Instant,
-    isSameDayReview: Boolean
+    rating: Rating,
+    reviewedAt: Instant
   ): (Double, Double) = {
-    val (stability, difficulty) = if (card.stability.isEmpty && card.difficulty.isEmpty) {
+    if (card.stability.isEmpty && card.difficulty.isEmpty) {
       // First review - set initial values
       (initialStability(rating), initialDifficulty(rating))
-    } else if (isSameDayReview) {
-      // Same-day review - use short-term stability formula
-      val newStability = shortTermStability(card.stability.get, rating)
-      val newDifficulty = nextDifficulty(card.difficulty.get, rating)
-      (newStability, newDifficulty)
     } else {
-      // Multi-day review - use full FSRS formulas
-      val retrievability = getCardRetrievability(card, reviewedAt)
-      val newStability = nextStability(card.difficulty.get, card.stability.get, retrievability, rating)
-      val newDifficulty = nextDifficulty(card.difficulty.get, rating)
-      (newStability, newDifficulty)
+      val isSameDayReview = card.lastReview.exists { lastReview =>
+        Duration.between(lastReview, reviewedAt).toDays < 1
+      }
+
+      if (isSameDayReview) {
+        // Same-day review - use short-term stability formula
+        val newStability = shortTermStability(card.stability.get, rating)
+        val newDifficulty = nextDifficulty(card.difficulty.get, rating)
+        (newStability, newDifficulty)
+      } else {
+        // Multi-day review - use full FSRS formulas
+        val retrievability = getCardRetrievability(card, reviewedAt)
+        val newStability = nextStability(card.difficulty.get, card.stability.get, retrievability, rating)
+        val newDifficulty = nextDifficulty(card.difficulty.get, rating)
+        (newStability, newDifficulty)
+      }
     }
-    (stability, difficulty)
   }
 
   private def calculateStepBasedTransition(
     currentStep: Int,
     stepSequence: Vector[Duration],
-    rating: ReviewLog.Rating,
+    rating: Rating,
     stability: Double
-  ): (Card.State, Duration) = {
+  ): (State, Duration) = {
 
     // Check if we should graduate to Review state
     val shouldGraduate = stepSequence.isEmpty ||
@@ -136,10 +136,10 @@ class Scheduler(
   }
 
   private def calculateReviewTransition(
-    rating: ReviewLog.Rating,
+    rating: Rating,
     stability: Double,
     relearningSteps: Vector[Duration]
-  ): (Card.State, Duration) = {
+  ): (State, Duration) = {
     rating match {
       case Rating.Again =>
         if (relearningSteps.isEmpty) {
