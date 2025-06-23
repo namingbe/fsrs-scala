@@ -32,24 +32,10 @@ class Scheduler(
   ): (Card, ReviewLog) = {
     val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt)
     val (nextState, nextInterval) = updateStateAndInterval(card, rating, newStability)
-    val finalInterval = getFuzzedInterval(nextInterval, nextState)
+    val dueAt = reviewedAt.plus(getFuzzedInterval(nextInterval, nextState))
 
-    val finalCard = Card(
-      cardId = card.cardId,
-      state = nextState,
-      stability = Some(newStability),
-      difficulty = Some(newDifficulty),
-      due = reviewedAt.plus(finalInterval),
-      lastReview = Some(reviewedAt),
-    )
-
-    val reviewLog = ReviewLog(
-      cardId = card.cardId,
-      rating = rating,
-      reviewedAt = reviewedAt,
-    )
-
-    (finalCard, reviewLog)
+    (Card(card.cardId, nextState, Some(newStability), Some(newDifficulty), dueAt, Some(reviewedAt)),
+      ReviewLog(card.cardId, rating, reviewedAt))
   }
 
   private def updateMemoryParameters(
@@ -65,18 +51,16 @@ class Scheduler(
         Duration.between(lastReview, reviewedAt).toDays < 1
       }
 
-      if (isSameDayReview) {
+      val newStability = if (isSameDayReview) {
         // Same-day review - use short-term stability formula
-        val newStability = shortTermStability(card.stability.get, rating)
-        val newDifficulty = nextDifficulty(card.difficulty.get, rating)
-        (newStability, newDifficulty)
+        shortTermStability(card.stability.get, rating)
       } else {
         // Multi-day review - use full FSRS formulas
         val retrievability = getCardRetrievability(card, reviewedAt)
-        val newStability = nextStability(card.difficulty.get, card.stability.get, retrievability, rating)
-        val newDifficulty = nextDifficulty(card.difficulty.get, rating)
-        (newStability, newDifficulty)
+        nextStability(card.difficulty.get, card.stability.get, retrievability, rating)
       }
+      val newDifficulty = nextDifficulty(card.difficulty.get, rating)
+      (newStability, newDifficulty)
     }
   }
 
@@ -172,15 +156,12 @@ class Scheduler(
   }
 
   private def shortTermStability(stability: Stability, rating: Rating): Stability = {
-    val stabilityIncrease = exp(shortTermFactor * (rating.value - 3 + ratingOffset)) *
-      pow(stability.value, -stabilityDiminish)
-
-    val clampedIncrease = if (Set(Rating.Good, Rating.Easy).contains(rating)) {
-      max(stabilityIncrease, 1.0)
-    } else {
-      stabilityIncrease
+    val stabilityIncrease =
+      exp(shortTermFactor * (rating.value - 3 + ratingOffset)) * pow(stability.value, -stabilityDiminish)
+    val clampedIncrease = rating match {
+      case Rating.Good | Rating.Easy => max(stabilityIncrease, 1.0)
+      case _ => stabilityIncrease
     }
-
     val newStability = stability.value * clampedIncrease
     Stability(newStability)
   }
@@ -202,45 +183,43 @@ class Scheduler(
     Difficulty(newDifficulty)
   }
 
-  private def nextStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability =
+  private def nextStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability = {
+    def nextForgetStability: Stability = {
+      val shortTerm = stability.value / exp(shortTermFactor * ratingOffset)
+      val longTerm = List(
+        forgetFactor,
+        pow(difficulty.value, -difficultyImpact),
+        pow(stability.value + 1, stabilityGrowth) - 1,
+        exp((1 - retrievability) * forgetRetrievability),
+      ).product
+      Stability(min(shortTerm, longTerm))
+    }
+
+    def nextRecallStability: Stability = {
+      val ratingFactor = rating match {
+        case Rating.Hard => hardPenalty
+        case Rating.Easy => easyBonus
+        case _ => 1.0
+      }
+      val compositeFactor = List(
+        exp(recallFactor),
+        11 - difficulty.value,
+        pow(stability.value, -stabilityExponent),
+        exp((1 - retrievability) * retrievabilityImpact) - 1,
+        ratingFactor,
+      ).product
+      Stability(stability.value * (1 + compositeFactor))
+    }
+
     rating match {
-      case Rating.Again => nextForgetStability(difficulty, stability, retrievability)
-      case _ => nextRecallStability(difficulty, stability, retrievability, rating)
+      case Rating.Again => nextForgetStability
+      case _ => nextRecallStability
     }
-
-  private def nextForgetStability(difficulty: Difficulty, stability: Stability, retrievability: Double): Stability = {
-    val shortTerm = stability.value / exp(shortTermFactor * ratingOffset)
-    val longTerm = List(
-      forgetFactor,
-      pow(difficulty.value, -difficultyImpact),
-      pow(stability.value + 1, stabilityGrowth) - 1,
-      exp((1 - retrievability) * forgetRetrievability),
-    ).product
-    Stability(min(shortTerm, longTerm))
-  }
-
-  private def nextRecallStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability = {
-    val ratingFactor = rating match {
-      case Rating.Hard => hardPenalty
-      case Rating.Easy => easyBonus
-      case _ => 1.0
-    }
-    val compositeFactor = List(
-      exp(recallFactor),
-      11 - difficulty.value,
-      pow(stability.value, -stabilityExponent),
-      exp((1 - retrievability) * retrievabilityImpact) - 1,
-      ratingFactor,
-    ).product
-
-    Stability(stability.value * (1 + compositeFactor))
   }
 
   private def getFuzzedInterval(interval: Duration, state: State): Duration = {
     val intervalDays = interval.toDays
-    if (!enableFuzzing || state != State.Review || intervalDays < 2.5) {
-      interval
-    } else {
+    if (enableFuzzing && state == State.Review && intervalDays >= 2.5) {
       val delta = Scheduler.FuzzRanges.foldLeft(1.0) { (acc, range) =>
         acc + range.factor * max(min(intervalDays, range.end) - range.start, 0.0)
       }
@@ -253,6 +232,8 @@ class Scheduler(
       val finalDays = min(fuzzedDays, maximumInterval.toInt)
 
       Duration.ofDays(finalDays)
+    } else {
+      interval
     }
   }
 }
