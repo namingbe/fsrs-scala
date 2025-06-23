@@ -8,7 +8,7 @@ case class Card(
   cardId: String = UUID.randomUUID().toString,
   state: Card.State = Card.State.StepBased(0),
   stability: Option[Stability] = None,
-  difficulty: Option[Double] = None,
+  difficulty: Option[Difficulty] = None,
   due: Instant = Instant.now(),
   lastReview: Option[Instant] = None
 )

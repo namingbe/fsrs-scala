@@ -56,7 +56,7 @@ class Scheduler(
     card: Card,
     rating: Rating,
     reviewedAt: Instant
-  ): (Stability, Double) = {
+  ): (Stability, Difficulty) = {
     if (card.stability.isEmpty && card.difficulty.isEmpty) {
       // First review - set initial values
       (initialStability(rating), initialDifficulty(rating))
@@ -164,9 +164,9 @@ class Scheduler(
     Stability(stability)
   }
 
-  private def initialDifficulty(rating: Rating): Double = {
+  private def initialDifficulty(rating: Rating): Difficulty = {
     val difficulty = baseDifficulty - exp(difficultyScale * (rating.value - 1)) + 1
-    clampDifficulty(difficulty)
+    Difficulty(difficulty)
   }
 
   private def nextInterval(stability: Stability): Long = {
@@ -189,24 +189,24 @@ class Scheduler(
     Stability(newStability)
   }
 
-  private def nextDifficulty(difficulty: Double, rating: Rating): Double = {
+  private def nextDifficulty(difficulty: Difficulty, rating: Rating): Difficulty = {
     def linearDamping(deltaDifficulty: Double, difficulty: Double): Double = {
       (10.0 - difficulty) * deltaDifficulty / 9.0
     }
 
-    def meanReversion(arg1: Double, arg2: Double): Double = {
-      meanReversionWeight * arg1 + (1 - meanReversionWeight) * arg2
+    def meanReversion(arg1: Difficulty, arg2: Double): Double = {
+      meanReversionWeight * arg1.value + (1 - meanReversionWeight) * arg2
     }
 
     val arg1 = initialDifficulty(Rating.Easy)
     val deltaDifficulty = -(difficultyChangeRate * (rating.value - 3))
-    val arg2 = difficulty + linearDamping(deltaDifficulty, difficulty)
+    val arg2 = difficulty.value + linearDamping(deltaDifficulty, difficulty.value)
 
     val newDifficulty = meanReversion(arg1, arg2)
-    clampDifficulty(newDifficulty)
+    Difficulty(newDifficulty)
   }
 
-  private def nextStability(difficulty: Double, stability: Stability, retrievability: Double, rating: Rating): Stability = {
+  private def nextStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability = {
     val newStability = if (rating == Rating.Again) {
       nextForgetStability(difficulty, stability, retrievability)
     } else {
@@ -215,9 +215,9 @@ class Scheduler(
     Stability(newStability)
   }
 
-  private def nextForgetStability(difficulty: Double, stability: Stability, retrievability: Double): Double = {
+  private def nextForgetStability(difficulty: Difficulty, stability: Stability, retrievability: Double): Double = {
     val longTermParams = forgetFactor *
-      pow(difficulty, -difficultyImpact) *
+      pow(difficulty.value, -difficultyImpact) *
       (pow(stability.value + 1, stabilityGrowth) - 1) *
       exp((1 - retrievability) * forgetRetrievability)
 
@@ -226,7 +226,7 @@ class Scheduler(
     min(longTermParams, shortTermParams)
   }
 
-  private def nextRecallStability(difficulty: Double, stability: Stability, retrievability: Double, rating: Rating): Double = {
+  private def nextRecallStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Double = {
     val ratingFactor = rating match {
       case Rating.Hard => hardPenalty
       case Rating.Easy => easyBonus
@@ -235,7 +235,7 @@ class Scheduler(
 
     stability.value * (1 +
       exp(recallFactor) *
-        (11 - difficulty) *
+        (11 - difficulty.value) *
         pow(stability.value, -stabilityExponent) *
         (exp((1 - retrievability) * retrievabilityImpact) - 1) *
         ratingFactor)
@@ -259,10 +259,6 @@ class Scheduler(
 
       Duration.ofDays(finalDays)
     }
-  }
-
-  private def clampDifficulty(difficulty: Double): Double = {
-    min(max(difficulty, Scheduler.MinDifficulty), Scheduler.MaxDifficulty)
   }
 }
 
