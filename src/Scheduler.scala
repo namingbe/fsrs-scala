@@ -18,7 +18,7 @@ class Scheduler(
   private val decay: Double = -decayRate
   private val factor: Double = pow(0.9, 1.0 / decay) - 1
 
-  def getCardRetrievability(card: Card, at: Instant = Instant.now()): Double = {
+  def retrievabilityOf(card: Card, at: Instant = Instant.now()): Double = {
     card.lastReview.fold(0.0) { last =>
       val elapsedDays = max(0, Duration.between(last, at).toDays)
       pow(1 + factor * elapsedDays / card.stability.get.value, decay)
@@ -30,7 +30,7 @@ class Scheduler(
     rating: Rating,
     reviewedAt: Instant = Instant.now,
   ): (Card, ReviewLog) = {
-    val (newStability, newDifficulty) = updateMemoryParameters(card, rating, reviewedAt)
+    val (newStability, newDifficulty) = updateStabilityAndDifficulty(card, rating, reviewedAt)
     val (nextState, nextInterval) = updateStateAndInterval(card, rating, newStability)
     val dueAt = reviewedAt.plus(getFuzzedInterval(nextInterval, nextState))
 
@@ -38,26 +38,18 @@ class Scheduler(
       ReviewLog(card.cardId, rating, reviewedAt))
   }
 
-  private def updateMemoryParameters(
+  private def updateStabilityAndDifficulty(
     card: Card,
     rating: Rating,
-    reviewedAt: Instant
+    reviewedAt: Instant,
   ): (Stability, Difficulty) = {
-    if (card.stability.isEmpty && card.difficulty.isEmpty) {
-      // First review - set initial values
+    if (card.stability.isEmpty || card.difficulty.isEmpty) { // First review
       (initialStability(rating), initialDifficulty(rating))
     } else {
-      val isSameDayReview = card.lastReview.exists { lastReview =>
-        Duration.between(lastReview, reviewedAt).toDays < 1
-      }
-
-      val newStability = if (isSameDayReview) {
-        // Same-day review - use short-term stability formula
+      val newStability = if (card.lastReview.exists(Duration.between(_, reviewedAt).toDays < 1)) { // Same day
         shortTermStability(card.stability.get, rating)
       } else {
-        // Multi-day review - use full FSRS formulas
-        val retrievability = getCardRetrievability(card, reviewedAt)
-        nextStability(card.difficulty.get, card.stability.get, retrievability, rating)
+        nextStability(card.difficulty.get, card.stability.get, retrievabilityOf(card, reviewedAt), rating)
       }
       val newDifficulty = nextDifficulty(card.difficulty.get, rating)
       (newStability, newDifficulty)
@@ -69,72 +61,51 @@ class Scheduler(
     rating: Rating,
     stability: Stability
   ): (State, Duration) = {
-    val isInitialLearning = card.stability.isEmpty
-    val stepSequence = if (isInitialLearning) learningSteps else relearningSteps
+    val stepSequence = if card.lastReview.isEmpty then learningSteps else relearningSteps
+
+    def stepBasedTransition(currentStep: Int): (State, Duration) = {
+      if (currentStep >= stepSequence.length && rating != Rating.Again) {
+        // Graduating from step-based
+        (State.Review, Duration.ofDays(nextInterval(stability)))
+      } else {
+        // Stay in StepBased state with step-based intervals
+        rating match {
+          case Rating.Again => (State.StepBased(0), stepSequence(0))
+
+          case Rating.Hard =>
+            val interval = if (currentStep == 0 && stepSequence.length == 1) {
+              Duration.ofMillis((stepSequence(0).toMillis * 1.5).toLong)
+            } else if (currentStep == 0 && stepSequence.length >= 2) {
+              Duration.ofMillis((stepSequence(0).toMillis + stepSequence(1).toMillis) / 2)
+            } else {
+              stepSequence(currentStep)
+            }
+            (State.StepBased(currentStep), interval)
+
+          case Rating.Good if currentStep + 1 == stepSequence.length => (State.Review, Duration.ofDays(nextInterval(stability)))
+          case Rating.Good => (State.StepBased(currentStep + 1), stepSequence(currentStep + 1))
+          case Rating.Easy => (State.Review, Duration.ofDays(nextInterval(stability)))
+        }
+      }
+    }
+
+    def reviewTransition: (State, Duration) = {
+      rating match {
+        case Rating.Again =>
+          if (relearningSteps.isEmpty) {
+            (State.Review, Duration.ofDays(nextInterval(stability)))
+          } else {
+            (State.StepBased(0), relearningSteps(0))
+          }
+
+        case Rating.Hard | Rating.Good | Rating.Easy =>
+          (State.Review, Duration.ofDays(nextInterval(stability)))
+      }
+    }
 
     card.state match {
-      case State.StepBased(currentStep) => calculateStepBasedTransition(currentStep, stepSequence, rating, stability)
-      case State.Review => calculateReviewTransition(rating, stability, stepSequence)
-    }
-  }
-
-  private def calculateStepBasedTransition(
-    currentStep: Int,
-    stepSequence: Vector[Duration],
-    rating: Rating,
-    stability: Stability,
-  ): (State, Duration) = {
-    if (currentStep >= stepSequence.length && rating != Rating.Again) {
-      // Graduating from step-based
-      (State.Review, Duration.ofDays(nextInterval(stability)))
-    } else {
-      // Stay in StepBased state with step-based intervals
-      val (nextStep, stepInterval) = rating match {
-        case Rating.Again =>
-          (0, stepSequence(0))
-
-        case Rating.Hard =>
-          val interval = if (currentStep == 0 && stepSequence.length == 1) {
-            stepSequence(0).multipliedBy(15).dividedBy(10) // * 1.5
-          } else if (currentStep == 0 && stepSequence.length >= 2) {
-            Duration.ofMillis((stepSequence(0).toMillis + stepSequence(1).toMillis) / 2)
-          } else {
-            stepSequence(currentStep)
-          }
-          (currentStep, interval)
-
-        case Rating.Good =>
-          if (currentStep + 1 == stepSequence.length) {
-            // Graduate to Review state
-            return (State.Review, Duration.ofDays(nextInterval(stability)))
-          } else {
-            (currentStep + 1, stepSequence(currentStep + 1))
-          }
-
-        case Rating.Easy =>
-          // Graduate to Review state immediately
-          return (State.Review, Duration.ofDays(nextInterval(stability)))
-      }
-
-      (State.StepBased(nextStep), stepInterval)
-    }
-  }
-
-  private def calculateReviewTransition(
-    rating: Rating,
-    stability: Stability,
-    relearningSteps: Vector[Duration]
-  ): (State, Duration) = {
-    rating match {
-      case Rating.Again =>
-        if (relearningSteps.isEmpty) {
-          (State.Review, Duration.ofDays(nextInterval(stability)))
-        } else {
-          (State.StepBased(0), relearningSteps(0))
-        }
-
-      case Rating.Hard | Rating.Good | Rating.Easy =>
-        (State.Review, Duration.ofDays(nextInterval(stability)))
+      case State.StepBased(currentStep) => stepBasedTransition(currentStep)
+      case State.Review => reviewTransition
     }
   }
 
