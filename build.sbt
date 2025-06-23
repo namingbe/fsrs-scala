@@ -14,3 +14,7 @@ Test / managedSourceDirectories := Nil
 Test / unmanagedSourceDirectories := Nil
 
 idePackagePrefix := Some("com.namingbe.fsrs")
+
+scalacOptions ++= Seq(
+  "-deprecation",
+)
