@@ -8,8 +8,8 @@ import scala.math.*
 class Scheduler(
   parameters: SchedulerParameters = SchedulerParameters.DefaultParameters,
   desiredRetention: Double = 0.9,
-  learningSteps: Vector[Duration] = Vector(Duration.ofMinutes(1), Duration.ofMinutes(10)),
-  relearningSteps: Vector[Duration] = Vector(Duration.ofMinutes(10)),
+  learningSteps: List[Duration] = List(Duration.ofMinutes(1), Duration.ofMinutes(10)),
+  relearningSteps: List[Duration] = List(Duration.ofMinutes(10)),
   maximumInterval: Long = 36500,
   enableFuzzing: Boolean = true,
 ) {
@@ -70,18 +70,15 @@ class Scheduler(
       } else {
         // Stay in StepBased state with step-based intervals
         rating match {
-          case Rating.Again => (State.StepBased(0), stepSequence(0))
-
-          case Rating.Hard =>
-            val interval = if (currentStep == 0 && stepSequence.length == 1) {
-              Duration.ofMillis((stepSequence(0).toMillis * 1.5).toLong)
-            } else if (currentStep == 0 && stepSequence.length >= 2) {
-              Duration.ofMillis((stepSequence(0).toMillis + stepSequence(1).toMillis) / 2)
-            } else {
-              stepSequence(currentStep)
+          case Rating.Again => (State.StepBased(0), stepSequence.head)
+          case Rating.Hard if currentStep == 0 =>
+            val interval = stepSequence match {
+              case Nil => ??? // how would the original handle empty step sequences?
+              case firstStep :: Nil => Duration.ofMillis((firstStep.toMillis * 1.5).toLong)
+              case firstStep :: secondStep :: _ => Duration.ofMillis((firstStep.toMillis + secondStep.toMillis) / 2)
             }
             (State.StepBased(currentStep), interval)
-
+          case Rating.Hard => (State.StepBased(currentStep), stepSequence(currentStep))
           case Rating.Good if currentStep + 1 == stepSequence.length => (State.Review, Duration.ofDays(nextInterval(stability)))
           case Rating.Good => (State.StepBased(currentStep + 1), stepSequence(currentStep + 1))
           case Rating.Easy => (State.Review, Duration.ofDays(nextInterval(stability)))
@@ -91,15 +88,8 @@ class Scheduler(
 
     def reviewTransition: (State, Duration) = {
       rating match {
-        case Rating.Again =>
-          if (relearningSteps.isEmpty) {
-            (State.Review, Duration.ofDays(nextInterval(stability)))
-          } else {
-            (State.StepBased(0), relearningSteps(0))
-          }
-
-        case Rating.Hard | Rating.Good | Rating.Easy =>
-          (State.Review, Duration.ofDays(nextInterval(stability)))
+        case Rating.Again if relearningSteps.nonEmpty => (State.StepBased(0), relearningSteps.head)
+        case _ => (State.Review, Duration.ofDays(nextInterval(stability)))
       }
     }
 
@@ -133,8 +123,7 @@ class Scheduler(
       case Rating.Good | Rating.Easy => max(stabilityIncrease, 1.0)
       case _ => stabilityIncrease
     }
-    val newStability = stability.value * clampedIncrease
-    Stability(newStability)
+    Stability(stability.value * clampedIncrease)
   }
 
   private def nextDifficulty(difficulty: Difficulty, rating: Rating): Difficulty = {
@@ -142,16 +131,10 @@ class Scheduler(
       (10.0 - difficulty.value) * deltaDifficulty / 9.0
     }
 
-    def meanReversion(arg1: Difficulty, arg2: Double): Double = {
-      meanReversionWeight * arg1.value + (1 - meanReversionWeight) * arg2
-    }
-
     val arg1 = initialDifficulty(Rating.Easy)
     val deltaDifficulty = -(difficultyChangeRate * (rating.value - 3))
     val arg2 = difficulty.value + linearDamping(deltaDifficulty)
-
-    val newDifficulty = meanReversion(arg1, arg2)
-    Difficulty(newDifficulty)
+    Difficulty(meanReversionWeight * arg1.value + (1 - meanReversionWeight) * arg2)
   }
 
   private def nextStability(difficulty: Difficulty, stability: Stability, retrievability: Double, rating: Rating): Stability = {
@@ -192,7 +175,7 @@ class Scheduler(
     val intervalDays = interval.toDays
     if (enableFuzzing && state == State.Review && intervalDays >= 2.5) {
       val delta = Scheduler.FuzzRanges.foldLeft(1.0) { (acc, range) =>
-        acc + range.factor * max(min(intervalDays, range.end) - range.start, 0.0)
+        acc + range.factor * max(min(intervalDays.toDouble, range.end) - range.start, 0.0)
       }
 
       val minDays = max(2, round(intervalDays - delta).toInt)
